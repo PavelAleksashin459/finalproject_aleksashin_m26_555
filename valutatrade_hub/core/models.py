@@ -2,20 +2,67 @@ import secrets
 import hashlib
 from datetime import datetime
 
+from constants import HASHED_PASSWORD, REGISTRATION_DATE, SALT, USER_ID, USER_NAME, WALLETS, BALANCE
 
+EXCHANGE_RATES = {
+    "USD": 1.0,
+    "EUR": 1.0786,
+    "BTC": 59337.21,
+    "RUB": 0.01016,
+    "ETH": 3720.00,
+}
 
 class Wallet:
-    def __init__(self):
-        pass
+    """Кошелек пользователя для одной валюты"""
 
-    def deposit(amount: float):
-        pass
 
-    def get_balance_info():
-        pass
+    def __init__(
+        self,
+        currency_code: str,
+        balance: float = 0.0
+    ):
+        self.currency_code = currency_code
+        self.balance = balance
 
-    def withdraw(amount: float):
-        pass
+    @property
+    def balance(self) -> float:
+        """Текущий баланс"""
+        return self._balance
+
+    @balance.setter
+    def balance(self, value: float) -> None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise TypeError("Баланс должен быть числом")
+        if value < 0:
+            raise ValueError("Баланс не может быть отрицательным")
+        self._balance = float(value)
+
+    @staticmethod
+    def _validate_amount(amount: float) -> None:
+        """Проверяет, что сумма — положительное число."""
+        if isinstance(amount, bool) or not isinstance(amount, (int, float)):
+            raise TypeError("Сумма должна быть числом")
+        if amount <= 0:
+            raise ValueError(f"{amount} должен быть положительным числом")
+
+    def deposit(self, amount: float) -> None:
+        """Пополняет баланс"""
+        self._validate_amount(amount)
+        self.balance = self.balance + amount
+
+    def get_balance_info(self) -> str:
+        """Информация о текущем балансе"""
+        return f"{self.currency_code}: {self.balance:.2f}"
+
+    def withdraw(self, amount: float) -> None:
+        """Снимает средства, если баланс позволяет."""
+        self._validate_amount(amount)
+        if amount > self.balance:
+            raise ValueError(
+                f"Недостаточно средств: доступно {self.balance:.2f} "
+                f"{self.currency_code}, требуется {amount:.2f} {self.currency_code}"
+            )
+        self.balance = self.balance - amount
 
 class User:
     """Пользователь системы."""
@@ -78,21 +125,21 @@ class User:
     def to_dict(self) -> dict:
         """Словарь для сохранения в users.json."""
         return {
-            "user_id": self._user_id,
-            "username": self._username,
-            "hashed_password": self._hashed_password,
-            "salt": self._salt,
-            "registration_date": self._registration_date.isoformat(),
+            USER_ID: self._user_id,
+            USER_NAME: self._username,
+            HASHED_PASSWORD: self._hashed_password,
+            SALT: self._salt,
+            REGISTRATION_DATE: self._registration_date.isoformat(),
         }
     @classmethod
     def from_dict(cls, data: dict) -> "User":
         """Создаёт пользователя из записи users.json."""
         return cls(
-            user_id=data["user_id"],
-            username=data["username"],
-            hashed_password=data["hashed_password"],
-            salt=data["salt"],
-            registration_date=datetime.fromisoformat(data["registration_date"]),
+            user_id=data[USER_ID],
+            username=data[USER_NAME],
+            hashed_password=data[HASHED_PASSWORD],
+            salt=data[SALT],
+            registration_date=datetime.fromisoformat(data[REGISTRATION_DATE]),
         )
 
     def verify_password(self, password: str) -> bool:
@@ -100,15 +147,71 @@ class User:
         return self._hash(password, self._salt) == self._hashed_password
 
 class Portfolio:
-    def __init__(self):
-        pass
+    """Все кошельки одного пользователя"""
 
-    def add_currency(currency_code: str):
-        pass 
+    def __init__(
+        self,
+        user_id: int,
+        wallets: dict[str, Wallet] | None = None,
+        user: User | None = None
+    ):
+        self._user_id = user_id
+        self._wallets = wallets or {}
+        self._user = user
 
-    def get_total_value(base_currency='USD'):
-        pass
+    @property
+    def user_id(self) -> int:
+        return self._user_id
+    @property
+    def user(self) -> User | None:
+        return self._user
+    @property
+    def wallets(self) -> dict[str, Wallet]:
+        return self._wallets.copy()
 
-    def get_wallet(currency_code):
-        pass
+    def add_currency(self, currency_code: str) -> Wallet:
+        """Добавляет пустой кошелёк, если его ещё нет"""
+        code = currency_code.upper()
+        if code in self._wallets:
+            raise ValueError(f"Кошелёк {code} уже существует")
+        self._wallets[code] = Wallet(code)
+        return self._wallets[code]
+
+    def get_total_value(self, base_currency: str='USD') -> float:
+        """Общая стоимость всех кошельков в базовой валюте."""
+        base = base_currency.upper()
+        if base not in EXCHANGE_RATES:
+            raise ValueError(f"Неизвестная валюта: {base}")
+        total_usd = sum(
+            wallet.balance * EXCHANGE_RATES[code]
+            for code, wallet in self._wallets.items()
+        )
+        return total_usd / EXCHANGE_RATES[base]
+
+    def get_wallet(self, currency_code) -> Wallet:
+        """Возвращает кошелёк по коду валюты"""
+        code = currency_code.upper()
+        if code in self._wallets:
+            return self._wallets[code]
+        else: 
+            raise ValueError(f"Кошелька {currency_code} не существует")
+    
+    @classmethod
+    def from_dict(cls, data: dict, user: User | None = None) -> "Portfolio":
+        """Создаёт портфель из записи portfolios.json."""
+        wallets = {
+            code: Wallet(code, info[BALANCE])
+            for code, info in data[WALLETS].items()
+        }
+        return cls(data[USER_ID], wallets, user)
+
+    def to_dict(self) -> dict:
+        """Словарь для сохранения в portfolios.json."""
+        return {
+            USER_ID: self._user_id,
+            WALLETS: {
+                code: {BALANCE: wallet.balance}
+                for code, wallet in self._wallets.items()
+            },
+        }
 

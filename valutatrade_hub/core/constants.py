@@ -3,8 +3,16 @@ from pathlib import Path
 DATA_PATH = Path(__file__).resolve().parent.parent.parent/ "data"
 
 
+CRYPTO = ("BTC", "ETH")
+
 
 PORTFOLIOS_DATA= "portfolios.json"
+WALLETS = "wallets"
+BASE = "base"
+BALANCE = "balance"
+CURRENCY = "currency"
+AMOUNT = "amount"
+
 
 
 USERS_DATA = "users.json"
@@ -12,5 +20,6 @@ USERS_DATA = "users.json"
 USER_ID = "user_id"
 USER_NAME = "username"
 HASHED_PASSWORD ="hashed_password"
+PASSWORD = "password"
 SALT = "salt"
 REGISTRATION_DATE = "registration_date"
