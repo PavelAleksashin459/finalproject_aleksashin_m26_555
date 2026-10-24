@@ -1,20 +1,36 @@
-import secrets
 import hashlib
+import secrets
 from datetime import datetime
 
-from constants import HASHED_PASSWORD, REGISTRATION_DATE, SALT, USER_ID, USER_NAME, WALLETS, BALANCE
+from valutatrade_hub.core.constants import (
+    BALANCE,
+    HASHED_PASSWORD,
+    REGISTRATION_DATE,
+    SALT,
+    USER_ID,
+    USER_NAME,
+    WALLETS,
+)
+from valutatrade_hub.core.currencies import CryptoCurrency, get_currency
+from valutatrade_hub.core.exceptions import (
+    CurrencyNotFoundError,
+    InsufficientFundsError,
+)
 
+# Заглушка курсов к USD на случай, если кеш rates.json ещё пуст
 EXCHANGE_RATES = {
     "USD": 1.0,
     "EUR": 1.0786,
-    "BTC": 59337.21,
+    "GBP": 1.27,
     "RUB": 0.01016,
+    "BTC": 59337.21,
     "ETH": 3720.00,
+    "SOL": 145.12,
 }
+
 
 class Wallet:
     """Кошелек пользователя для одной валюты"""
-
 
     def __init__(
         self,
@@ -51,18 +67,21 @@ class Wallet:
         self.balance = self.balance + amount
 
     def get_balance_info(self) -> str:
-        """Информация о текущем балансе"""
-        return f"{self.currency_code}: {self.balance:.2f}"
+        """Баланс кошелька: криптовалюты с 4 знаками, фиат с 2."""
+        try:
+            crypto = isinstance(get_currency(self.currency_code), CryptoCurrency)
+        except CurrencyNotFoundError:
+            crypto = False
+        balance = f"{self.balance:.4f}" if crypto else f"{self.balance:.2f}"
+        return f"{self.currency_code}: {balance}"
 
     def withdraw(self, amount: float) -> None:
         """Снимает средства, если баланс позволяет."""
         self._validate_amount(amount)
         if amount > self.balance:
-            raise ValueError(
-                f"Недостаточно средств: доступно {self.balance:.2f} "
-                f"{self.currency_code}, требуется {amount:.2f} {self.currency_code}"
-            )
+            raise InsufficientFundsError(self.balance, amount, self.currency_code)
         self.balance = self.balance - amount
+
 
 class User:
     """Пользователь системы."""
@@ -88,18 +107,27 @@ class User:
 
     @property
     def user_id(self) -> int:
+        """Идентификатор пользователя."""
         return self._user_id
+
     @property
     def username(self) -> str:
+        """Имя пользователя."""
         return self._username
+
     @property
     def hashed_password(self) -> str:
+        """Хеш пароля с солью."""
         return self._hashed_password
+
     @property
     def salt(self) -> str:
+        """Соль для хеширования пароля."""
         return self._salt
+
     @property
     def registration_date(self) -> datetime:
+        """Дата регистрации."""
         return self._registration_date
 
     @username.setter
@@ -121,7 +149,7 @@ class User:
             raise ValueError("Пароль должен быть не короче 4 символов")
         self._salt = secrets.token_hex(8)
         self._hashed_password = self._hash(new_password, self._salt)
-    
+
     def to_dict(self) -> dict:
         """Словарь для сохранения в users.json."""
         return {
@@ -131,6 +159,7 @@ class User:
             SALT: self._salt,
             REGISTRATION_DATE: self._registration_date.isoformat(),
         }
+
     @classmethod
     def from_dict(cls, data: dict) -> "User":
         """Создаёт пользователя из записи users.json."""
@@ -145,6 +174,7 @@ class User:
     def verify_password(self, password: str) -> bool:
         """Проверяет введённый пароль на совпадение."""
         return self._hash(password, self._salt) == self._hashed_password
+
 
 class Portfolio:
     """Все кошельки одного пользователя"""
@@ -161,12 +191,17 @@ class Portfolio:
 
     @property
     def user_id(self) -> int:
+        """Идентификатор пользователя."""
         return self._user_id
+
     @property
     def user(self) -> User | None:
+        """Владелец портфеля (только чтение)."""
         return self._user
+
     @property
     def wallets(self) -> dict[str, Wallet]:
+        """Копия словаря кошельков: снаружи его не изменить."""
         return self._wallets.copy()
 
     def add_currency(self, currency_code: str) -> Wallet:
@@ -177,25 +212,33 @@ class Portfolio:
         self._wallets[code] = Wallet(code)
         return self._wallets[code]
 
-    def get_total_value(self, base_currency: str='USD') -> float:
-        """Общая стоимость всех кошельков в базовой валюте."""
+    def get_total_value(
+        self, base_currency: str = "USD", rates: dict[str, float] | None = None
+    ) -> float:
+        """Общая стоимость всех кошельков в базовой валюте.
+
+        rates — курсы к USD вида {"BTC": 59337.21}; по умолчанию заглушка.
+        """
+        rates = rates or EXCHANGE_RATES
         base = base_currency.upper()
-        if base not in EXCHANGE_RATES:
+        if base not in rates:
             raise ValueError(f"Неизвестная валюта: {base}")
+        missing = [code for code in self._wallets if code not in rates]
+        if missing:
+            raise ValueError(f"Нет курса для: {', '.join(missing)}")
         total_usd = sum(
-            wallet.balance * EXCHANGE_RATES[code]
-            for code, wallet in self._wallets.items()
+            wallet.balance * rates[code] for code, wallet in self._wallets.items()
         )
-        return total_usd / EXCHANGE_RATES[base]
+        return total_usd / rates[base]
 
     def get_wallet(self, currency_code) -> Wallet:
         """Возвращает кошелёк по коду валюты"""
         code = currency_code.upper()
         if code in self._wallets:
             return self._wallets[code]
-        else: 
+        else:
             raise ValueError(f"Кошелька {currency_code} не существует")
-    
+
     @classmethod
     def from_dict(cls, data: dict, user: User | None = None) -> "Portfolio":
         """Создаёт портфель из записи portfolios.json."""
@@ -214,4 +257,3 @@ class Portfolio:
                 for code, wallet in self._wallets.items()
             },
         }
-
